@@ -311,7 +311,9 @@ export default function App() {
     });
 
     // QR 코드 (UTF-8 한글 ㅡ 완벽 지원)
-    const qrImg = generateQrGraphic(data.pltno, 10);
+    // 출고용(fmt=2line)은 항목당 2줄이라 공간 부족 → QR 모듈 절반으로 축소
+    const qrModuleSize = data.fmt === '2line' ? 5 : 10;
+    const qrImg = generateQrGraphic(data.pltno, qrModuleSize);
     const labelWidth = 576;
     const qrPixelWidth = qrImg.widthBytes * 8;
     const qrX = Math.max(0, Math.floor((labelWidth - qrPixelWidth) / 2));
@@ -359,10 +361,15 @@ export default function App() {
     );
 
     // ===== PLT.NO =====
+    // 출고용(fmt=2line): 폰트 0 size 1 (size 0 대비 약 2배) + SETBOLD로 굵게. PLT.NO는 영숫자만 들어가서 안전
+    const pltnoFont = data.fmt === '2line' ? 0 : 55;
+    const pltnoFontSize = data.fmt === '2line' ? 1 : 3;
     const pltnoY = headerHeight + qrImg.height + 10;
     cpclLines.push('LINE 10 ' + pltnoY + ' 566 ' + pltnoY + ' 1');
     cpclLines.push('CENTER');
-    cpclLines.push('TEXT 55 3 0 ' + (pltnoY + 10) + ' ' + data.pltno);
+    if (data.fmt === '2line') cpclLines.push('SETBOLD 1');
+    cpclLines.push('TEXT ' + pltnoFont + ' ' + pltnoFontSize + ' 0 ' + (pltnoY + 10) + ' ' + data.pltno);
+    if (data.fmt === '2line') cpclLines.push('SETBOLD 0');
 
     // ===== 하단: 항목 목록 =====
     // fmt='2line': SKU명(굵게) + 바코드+수량 (2줄) - 출고PDA용
@@ -443,7 +450,9 @@ export default function App() {
               <Text style={styles.qrText}>QR: {labelData.pltno}</Text>
             </View>
             <Text style={styles.labelDivider}>{'─'.repeat(20)}</Text>
-            <Text style={styles.labelPltno}>{labelData.pltno}</Text>
+            <Text style={[styles.labelPltno, labelData.fmt === '2line' ? styles.labelPltnoSmall : null]}>
+              {labelData.pltno}
+            </Text>
             <View style={styles.itemsList}>
               {/* fmt='2line': SKU명/바코드+수량 2줄. 기본: 바코드+수량 1줄 (입고PDA 호환) */}
               {labelData.items.map((item, idx) => (
@@ -545,6 +554,7 @@ const styles = StyleSheet.create({
   qrPlaceholder: {width: 120, height: 120, backgroundColor: '#f0f0f0', borderWidth: 1, borderColor: '#ccc', alignItems: 'center', justifyContent: 'center', marginVertical: 5},
   qrText: {fontSize: 11, color: '#666', textAlign: 'center'},
   labelPltno: {fontSize: 26, fontWeight: 'bold', color: '#1a1a1a'},
+  labelPltnoSmall: {fontSize: 24, fontWeight: 'bold'},
   labelBarcode: {fontSize: 13, color: '#666', marginTop: 5},
   labelQty: {fontSize: 13, color: '#666', marginTop: 3},
   itemsList: {marginTop: 8, width: '100%'},
