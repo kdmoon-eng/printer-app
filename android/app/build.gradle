@@ -18,10 +18,8 @@ react {
     // cliFile = file("../../node_modules/react-native/cli.js")
 
     /* Variants */
-    //   The list of variants to that are debuggable. For those we're going to
-    //   skip the bundling of the JS bundle and the assets. Default is "debug", "debugOptimized".
-    //   If you add flavors like lite, prod, etc. you'll have to list your debuggableVariants.
-    // debuggableVariants = ["liteDebug", "liteDebugOptimized", "prodDebug", "prodDebugOptimized"]
+    //   debug 빌드에도 JS 번들을 포함시키기 위해 빈 리스트 설정
+    debuggableVariants = []
 
     /* Bundling */
     //   A list containing the node command and its flags. Default is just 'node'.
@@ -79,11 +77,21 @@ android {
 
     namespace "com.sewoolabel"
     defaultConfig {
-        applicationId "com.sewoolabel"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+    }
+    flavorDimensions += "stage"
+    productFlavors {
+        inbound {
+            dimension "stage"
+            applicationId "com.sewoolabel"
+        }
+        outbound {
+            dimension "stage"
+            applicationId "com.sewoolabel.outbound"
+        }
     }
     signingConfigs {
         debug {

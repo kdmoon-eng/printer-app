@@ -35,6 +35,10 @@ local.properties
 !debug.keystore
 .kotlin/
 
+# React Native generated bundles
+android/app/src/main/assets/index.android.bundle
+android/app/src/main/assets/index.android.bundle.map
+
 # node.js
 #
 node_modules/
