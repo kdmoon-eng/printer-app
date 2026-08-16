@@ -38,6 +38,7 @@ interface LabelData {
   customers: string[];         // v5.4.5: 모든 고유 고객사
   hasMultipleCustomers: boolean; // v5.4.5: 다중 고객사 여부
   fmt: string;                 // v5.5: 라벨 포맷 ('' = 기본 1줄, '2line' = SKU명+바코드 2줄)
+  qr: string;                  // v5.6: QR에 인코딩할 내용(URL 등). 없으면 pltno 사용 (입고PDA 하위호환)
 }
 
 export default function App() {
@@ -126,6 +127,7 @@ export default function App() {
         customers: customers,
         hasMultipleCustomers: hasMultipleCustomers,
         fmt: (params.get('fmt') || '').toLowerCase(),
+        qr: decodeURIComponent(params.get('qr') || ''),
       };
 
       if (data.pltno) {
@@ -254,18 +256,26 @@ export default function App() {
     qr.make();
 
     const moduleCount = qr.getModuleCount();
-    const imgSize = moduleCount * moduleSize;
+    // QR 표준 여백(quiet zone): 사방 4모듈의 흰 테두리. 휴대폰 카메라 QR 리더는
+    // 이 여백이 있어야 finder 패턴 위치를 잡음. (PDA 산업용 스캐너는 여백 없어도 읽힘)
+    const quiet = 4;
+    const totalModules = moduleCount + quiet * 2;
+    const imgSize = totalModules * moduleSize;
     const widthBytes = Math.ceil(imgSize / 8);
 
     let hex = '';
     for (let y = 0; y < imgSize; y++) {
-      const moduleY = Math.floor(y / moduleSize);
+      const moduleY = Math.floor(y / moduleSize) - quiet;
       for (let byteIdx = 0; byteIdx < widthBytes; byteIdx++) {
         let byte = 0;
         for (let bit = 0; bit < 8; bit++) {
           const px = byteIdx * 8 + bit;
-          const moduleX = Math.floor(px / moduleSize);
-          if (moduleX < moduleCount && moduleY < moduleCount && qr.isDark(moduleY, moduleX)) {
+          const moduleX = Math.floor(px / moduleSize) - quiet;
+          if (
+            moduleX >= 0 && moduleY >= 0 &&
+            moduleX < moduleCount && moduleY < moduleCount &&
+            qr.isDark(moduleY, moduleX)
+          ) {
             byte |= (0x80 >> bit);
           }
         }
@@ -311,9 +321,15 @@ export default function App() {
     });
 
     // QR 코드 (UTF-8 한글 ㅡ 완벽 지원)
-    // 출고용(fmt=2line)은 항목당 2줄이라 공간 부족 → QR 모듈 절반으로 축소
-    const qrModuleSize = data.fmt === '2line' ? 5 : 10;
-    const qrImg = generateQrGraphic(data.pltno, qrModuleSize);
+    // 출고용(fmt=2line): 2026-08-16 현장 요청으로 4 → 6 (1.5배).
+    //   항목 리스트를 QR 조회로 옮기면서 공간이 남았고, 송장 매칭 때 박스 QR 을 자주 찍게 돼
+    //   작은 QR 이 불편했다. labelHeight 가 qrImg.height 를 더해 자동으로 늘어나고
+    //   qrX 가 가운데 정렬을 다시 잡으므로 나머지 배치는 손댈 곳이 없다.
+    //   폭 여유: 60자 URL 기준 약 45모듈 × 6 = 270px < 라벨 576px.
+    const qrModuleSize = data.fmt === '2line' ? 6 : 10;
+    // v5.6: 출고(fmt=2line) + qr 파라미터가 있을 때만 QR을 URL로. 입고는 항상 pltno (영향 금지)
+    const qrContent = (data.fmt === '2line' && data.qr) ? data.qr : data.pltno;
+    const qrImg = generateQrGraphic(qrContent, qrModuleSize);
     const labelWidth = 576;
     const qrPixelWidth = qrImg.widthBytes * 8;
     const qrX = Math.max(0, Math.floor((labelWidth - qrPixelWidth) / 2));
@@ -322,13 +338,26 @@ export default function App() {
     const is2Line = data.fmt === '2line';
     const headerHeight = 160;
     const pltnoBlockHeight = 40; // PLT.NO와 첫 항목 간격
-    const itemLineHeight = is2Line ? 80 : 40; // 2line 포맷은 SKU명+바코드 2줄이라 2배
+    const itemLineHeight = 40; // 입고(1줄 항목) 높이
     const bottomPadding = 30;
 
-    const totalItemLines = items.length * itemLineHeight;
-    const labelHeight =
-      headerHeight + qrImg.height + 20 + pltnoBlockHeight +
-      totalItemLines + bottomPadding;
+    // 출고용(2line): 큰 출고번호 + 더 큰 박스/파렛번호 블록 높이 (항목 리스트 없음)
+    // 2026-05-30: 출고번호 SETMAG 2 2(×2), 박스번호 SETMAG 4 4(×4)로 더 크게
+    // 박스번호는 출고번호 바로 밑에 배치 + 잘리지 않게 하단 여유 넉넉히
+    const shipNoBlockHeight = 120;  // 출고번호(폰트0 size2 ×2)
+    const boxNoBlockHeight = 480;   // 박스/파렛번호(폰트0 size5 ×4) — 하단 클립 방지 여유 포함
+
+    let labelHeight;
+    if (is2Line) {
+      labelHeight =
+        headerHeight + qrImg.height + 20 +
+        shipNoBlockHeight + boxNoBlockHeight + bottomPadding;
+    } else {
+      const totalItemLines = items.length * itemLineHeight;
+      labelHeight =
+        headerHeight + qrImg.height + 20 + pltnoBlockHeight +
+        totalItemLines + bottomPadding;
+    }
 
     const cpclLines: string[] = [];
     cpclLines.push('! 0 200 200 ' + labelHeight + ' 1');
@@ -360,35 +389,42 @@ export default function App() {
       'EG ' + qrImg.widthBytes + ' ' + qrImg.height + ' ' + qrX + ' 160 ' + qrImg.hex,
     );
 
-    // ===== PLT.NO =====
-    // 출고용(fmt=2line): 폰트 0 size 1 (size 0 대비 약 2배) + SETBOLD로 굵게. PLT.NO는 영숫자만 들어가서 안전
-    const pltnoFont = data.fmt === '2line' ? 0 : 55;
-    const pltnoFontSize = data.fmt === '2line' ? 1 : 3;
+    // ===== 출고번호 + 박스/파렛 번호 =====
     const pltnoY = headerHeight + qrImg.height + 10;
     cpclLines.push('LINE 10 ' + pltnoY + ' 566 ' + pltnoY + ' 1');
     cpclLines.push('CENTER');
-    if (data.fmt === '2line') cpclLines.push('SETBOLD 1');
-    cpclLines.push('TEXT ' + pltnoFont + ' ' + pltnoFontSize + ' 0 ' + (pltnoY + 10) + ' ' + data.pltno);
-    if (data.fmt === '2line') cpclLines.push('SETBOLD 0');
 
-    // ===== 하단: 항목 목록 =====
-    // fmt='2line': SKU명(굵게) + 바코드+수량 (2줄) - 출고PDA용
-    // 기본:        바코드 + 수량 (1줄) - 입고PDA 기존 포맷
-    cpclLines.push('LEFT');
-    let curY = pltnoY + pltnoBlockHeight;
-    items.forEach((item, idx) => {
-      const prefix = isMixed ? (idx + 1) + '. ' : '';
-      if (is2Line) {
-        const nameLine = prefix + (item.name || '');
-        const barcodeQtyLine = item.barcode + '   ' + item.qty + 'EA';
-        cpclLines.push('TEXT 55 1 30 ' + curY + ' ' + nameLine);
-        cpclLines.push('TEXT 55 0 60 ' + (curY + 38) + ' ' + barcodeQtyLine);
-      } else {
+    if (is2Line) {
+      // 출고용: 출고번호(크게) + 박스/파렛번호(더 크게). 항목 리스트는 QR로 조회하므로 미출력.
+      // pltno = "출고번호-B1" → 마지막 '-' 기준으로 출고번호 / 박스(파렛)번호 분리
+      const lastDash = data.pltno.lastIndexOf('-');
+      const shipPart = lastDash > 0 ? data.pltno.substring(0, lastDash) : data.pltno;
+      const boxPart = lastDash > 0 ? data.pltno.substring(lastDash + 1) : '';
+
+      cpclLines.push('SETBOLD 1');
+      // 출고번호 (폰트0 size2 ×2)
+      cpclLines.push('SETMAG 2 2');
+      cpclLines.push('TEXT 0 2 0 ' + (pltnoY + 25) + ' ' + shipPart);
+      // 박스/파렛 번호 (폰트0 size5 ×4 — 출고번호 ×2의 2배) — 출고번호 바로 밑에 배치
+      if (boxPart) {
+        cpclLines.push('SETMAG 4 4');
+        cpclLines.push('TEXT 0 5 0 ' + (pltnoY + 100) + ' ' + boxPart);
+      }
+      cpclLines.push('SETMAG 1 1'); // 배율 원복 (이후 텍스트 영향 방지)
+      cpclLines.push('SETBOLD 0');
+      cpclLines.push('LEFT');
+    } else {
+      // 입고용(기존): pltno 한 줄 + 항목 목록(바코드+수량 1줄)
+      cpclLines.push('TEXT 55 3 0 ' + (pltnoY + 10) + ' ' + data.pltno);
+      cpclLines.push('LEFT');
+      let curY = pltnoY + pltnoBlockHeight;
+      items.forEach((item, idx) => {
+        const prefix = isMixed ? (idx + 1) + '. ' : '';
         const line = prefix + item.barcode + '   ' + item.qty + 'EA';
         cpclLines.push('TEXT 55 0 30 ' + curY + ' ' + line);
-      }
-      curY += itemLineHeight;
-    });
+        curY += itemLineHeight;
+      });
+    }
 
     cpclLines.push('FORM');
     cpclLines.push('PRINT');
@@ -400,6 +436,10 @@ export default function App() {
 
   // 딥링크로 열렸을 때 (라벨 데이터 있음)
   if (labelData) {
+    // 출고(2line) 미리보기용: pltno "출고번호-B1" → 출고번호 / 박스(파렛)번호 분리
+    const pvDash = labelData.pltno ? labelData.pltno.lastIndexOf('-') : -1;
+    const pvShip = pvDash > 0 ? labelData.pltno.substring(0, pvDash) : labelData.pltno;
+    const pvBox = pvDash > 0 ? labelData.pltno.substring(pvDash + 1) : '';
     return (
       <ScrollView style={styles.container}>
         <View style={styles.header}>
@@ -447,37 +487,32 @@ export default function App() {
             )}
             <Text style={styles.labelDivider}>{'─'.repeat(20)}</Text>
             <View style={styles.qrPlaceholder}>
-              <Text style={styles.qrText}>QR: {labelData.pltno}</Text>
+              <Text style={styles.qrText}>QR: {(labelData.fmt === '2line' && labelData.qr) ? labelData.qr : labelData.pltno}</Text>
             </View>
             <Text style={styles.labelDivider}>{'─'.repeat(20)}</Text>
-            <Text style={[styles.labelPltno, labelData.fmt === '2line' ? styles.labelPltnoSmall : null]}>
-              {labelData.pltno}
-            </Text>
-            <View style={styles.itemsList}>
-              {/* fmt='2line': SKU명/바코드+수량 2줄. 기본: 바코드+수량 1줄 (입고PDA 호환) */}
-              {labelData.items.map((item, idx) => (
-                labelData.fmt === '2line' ? (
-                  <View key={idx} style={styles.item2LineBlock}>
-                    <Text style={styles.itemName}>
-                      {labelData.isMixed ? idx + 1 + '. ' : ''}
-                      {item.name}
-                    </Text>
-                    <View style={styles.itemRowSub}>
-                      <Text style={styles.itemBarcodeSub}>{item.barcode}</Text>
+            {labelData.fmt === '2line' ? (
+              // 출고용: 출고번호(크게) + 박스/파렛번호(더 크게), 항목 리스트 없음(QR로 조회)
+              <>
+                <Text style={styles.labelShipNo}>{pvShip}</Text>
+                {pvBox ? <Text style={styles.labelBoxNo}>{pvBox}</Text> : null}
+              </>
+            ) : (
+              // 입고용(기존): pltno + 바코드+수량 1줄 리스트
+              <>
+                <Text style={styles.labelPltno}>{labelData.pltno}</Text>
+                <View style={styles.itemsList}>
+                  {labelData.items.map((item, idx) => (
+                    <View key={idx} style={styles.itemRow}>
+                      <Text style={styles.itemBarcode}>
+                        {labelData.isMixed ? idx + 1 + '. ' : ''}
+                        {item.barcode}
+                      </Text>
                       <Text style={styles.itemQty}>{item.qty}EA</Text>
                     </View>
-                  </View>
-                ) : (
-                  <View key={idx} style={styles.itemRow}>
-                    <Text style={styles.itemBarcode}>
-                      {labelData.isMixed ? idx + 1 + '. ' : ''}
-                      {item.barcode}
-                    </Text>
-                    <Text style={styles.itemQty}>{item.qty}EA</Text>
-                  </View>
-                )
-              ))}
-            </View>
+                  ))}
+                </View>
+              </>
+            )}
           </View>
         </View>
 
@@ -555,6 +590,8 @@ const styles = StyleSheet.create({
   qrText: {fontSize: 11, color: '#666', textAlign: 'center'},
   labelPltno: {fontSize: 26, fontWeight: 'bold', color: '#1a1a1a'},
   labelPltnoSmall: {fontSize: 24, fontWeight: 'bold'},
+  labelShipNo: {fontSize: 44, fontWeight: 'bold', color: '#1a1a1a', textAlign: 'center'},
+  labelBoxNo: {fontSize: 150, fontWeight: 'bold', color: '#059669', textAlign: 'center', marginTop: 2, letterSpacing: 1},
   labelBarcode: {fontSize: 13, color: '#666', marginTop: 5},
   labelQty: {fontSize: 13, color: '#666', marginTop: 3},
   itemsList: {marginTop: 8, width: '100%'},
