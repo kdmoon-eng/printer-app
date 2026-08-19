@@ -183,8 +183,17 @@ export default function App() {
       setIsScanning(true);
       const paired = await RNBluetoothClassic.getBondedDevices();
       // Sewoo 프린터로 보이는 기기만 노출 (다른 BT기기 잘못 선택해서 SPP 연결 실패하는 사고 방지)
+      // ⚠️이름만으로 판정하면 프린터 이름을 바꿔 페어링한 기기를 놓친다.
+      //   2026-08-19 실측: PDA TCB9PGWRC0247 의 프린터가 'Mobile_Printer' 로 되어 있어 목록에서 사라졌다
+      //   (MAC 00:13:7B:90:8E:0A = 다른 기기의 SW_DEA5 와 같은 Sewoo 대역이었다).
+      //   → 제조사 식별은 이름보다 MAC 이 정확하므로 Sewoo OUI(앞 3바이트 00:13:7B)도 같이 인정한다.
       const printerPattern = /^(SW[_-]|Sewoo|LK-)/i;
-      const printers = paired.filter(d => d.name && printerPattern.test(d.name));
+      const sewooOui = /^00[:-]?13[:-]?7B/i;
+      const printers = paired.filter(
+        d =>
+          (d.name && printerPattern.test(d.name)) ||
+          (d.address && sewooOui.test(d.address)),
+      );
       setDevices(printers);
       if (printers.length === 0) {
         setStatus(
